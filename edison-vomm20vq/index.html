@@ -234,6 +234,41 @@
     return hit;
   }
 
+  /* Grensen deles i vannrette bånd, så et testpunkt bare sjekkes mot
+     de hjørnene som faktisk kan krysse dets breddegrad — i stedet for
+     å gå gjennom hele grensen for hvert eneste prøvepunkt. */
+  function buildRingIndex(rings, bbox, bins){
+    bins = bins || 64;
+    const span = Math.max(1e-9, bbox.n - bbox.s);
+    const h = span / bins;
+    const buckets = Array.from({length:bins}, ()=>[]);
+    for(const ring of rings){
+      for(let i=0,j=ring.length-1;i<ring.length;j=i++){
+        const yi=ring[i].lat, xi=ring[i].lon, yj=ring[j].lat, xj=ring[j].lon;
+        let b0 = Math.floor((Math.min(yi,yj)-bbox.s)/h);
+        let b1 = Math.floor((Math.max(yi,yj)-bbox.s)/h);
+        b0 = Math.max(0, Math.min(bins-1, b0));
+        b1 = Math.max(0, Math.min(bins-1, b1));
+        const edge = [xi,yi,xj,yj];
+        for(let b=b0; b<=b1; b++) buckets[b].push(edge);
+      }
+    }
+    return {bbox, bins, h, buckets};
+  }
+
+  function inRingsIndexed(lat, lon, idx){
+    const b = idx.bbox;
+    if(lat < b.s || lat > b.n) return false;
+    let bin = Math.floor((lat - b.s)/idx.h);
+    if(bin < 0) bin = 0; if(bin >= idx.bins) bin = idx.bins-1;
+    let hit = false;
+    for(const e of idx.buckets[bin]){
+      const xi=e[0], yi=e[1], xj=e[2], yj=e[3];
+      if(((yi>lat)!==(yj>lat)) && (lon < (xj-xi)*(lat-yi)/(yj-yi)+xi)) hit=!hit;
+    }
+    return hit;
+  }
+
   function sideOf(a, b, lat, lon){
     const k = Math.cos(a.lat*RAD);
     const ex = (b.lon-a.lon)*k, ey = b.lat-a.lat;
@@ -265,7 +300,7 @@
     if(c.type==='geo'){
       const b = c.bbox;
       if(b && (lat<b.s || lat>b.n || lon<b.w || lon>b.e)) return !c.keep;
-      const inside = inRings(lat, lon, c.rings);
+      const inside = c.idx ? inRingsIndexed(lat, lon, c.idx) : inRings(lat, lon, c.rings);
       return c.keep ? inside : !inside;
     }
     if(c.type==='closer'){
@@ -288,7 +323,7 @@
     if(c.type==='poly'){
       const b = c.bbox;
       if(b && (lat<b.s || lat>b.n || lon<b.w || lon>b.e)) return !c.keep;
-      const inside = inPoly(lat,lon,c.pts);
+      const inside = c.idx ? inRingsIndexed(lat, lon, c.idx) : inPoly(lat,lon,c.pts);
       return c.keep ? inside : !inside;
     }
     return true;
@@ -309,8 +344,8 @@
 
   function stateFor(c){
     if(stateCache.has(c.id)) return stateCache.get(c.id);
-    if(c.type==='geo' && !c.bbox) c.bbox = bboxOf(c.rings);
-    if(c.type==='poly' && !c.bbox) c.bbox = bboxOf([c.pts]);
+    if(c.type==='geo' && !c.bbox){ c.bbox = bboxOf(c.rings); c.idx = buildRingIndex(c.rings, c.bbox); }
+    if(c.type==='poly' && !c.bbox){ c.bbox = bboxOf([c.pts]); c.idx = buildRingIndex([c.pts], c.bbox); }
 
     const st = new Uint8Array(coarseCount);
     const sub = new Map();
@@ -907,7 +942,7 @@
   async function fetchRings(osm){
     if(!osm || !/^[NWR]\d+$/.test(osm)) return null;
     const r = await fetch('https://nominatim.openstreetmap.org/lookup?format=jsonv2'+
-            '&polygon_geojson=1&polygon_threshold=0.0008&osm_ids='+osm);
+            '&polygon_geojson=1&polygon_threshold=0.0025&osm_ids='+osm);
     if(!r.ok) return null;
     const d = await r.json();
     return d.length ? ringsOf(d[0].geojson) : null;
