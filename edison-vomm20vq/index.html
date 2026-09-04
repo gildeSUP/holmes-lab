@@ -219,6 +219,7 @@
     cellCount = idx;
     alive = new Uint8Array(cellCount);
     if(typeof maskCache !== 'undefined') maskCache.clear();
+    yCache = {z:null, top:null, bot:null};
   }
 
   /* ---------- Sperringer ---------- */
@@ -359,6 +360,18 @@
   L.circle([CENTER.lat,CENTER.lon],{radius:RADIUS,color:'#0F1E2B',weight:2,
     dashArray:'6 5',fill:false}).addTo(map);
 
+  let yCache = {z:null, top:null, bot:null};
+  function rowYs(z){
+    if(yCache.z === z) return yCache;
+    const top = new Float64Array(rows.length), bot = new Float64Array(rows.length);
+    for(let i=0;i<rows.length;i++){
+      top[i] = map.project([rows[i].lat + rows[i].dLat/2, 0], z).y;
+      bot[i] = map.project([rows[i].lat - rows[i].dLat/2, 0], z).y;
+    }
+    yCache = {z, top, bot};
+    return yCache;
+  }
+
   const CellGrid = L.GridLayer.extend({
     createTile(coords){
       const tile = L.DomUtil.create('canvas');
@@ -371,17 +384,24 @@
       ctx.fillStyle = 'rgba(15,30,43,.40)';
 
       if(!rows.length || !alive) return tile;      // kartet tegner første ruter før brettet er bygget
+      const Y = rowYs(z);
       const mid = rows[Math.floor(rows.length/2)];
-      const rowPx = Math.abs(map.project([mid.lat+mid.dLat, 0], z).y - map.project([mid.lat, 0], z).y);
+      const rowPx = Math.abs(Y.bot[0] - Y.top[0]);
       const colPx = mid.dLon*sx;
       const rowStep = Math.max(1, Math.ceil(1.1/rowPx));
       const colStep = Math.max(1, Math.ceil(1.1/colPx));
 
-      for(let ri=0; ri<rows.length; ri+=rowStep){
+      // rad 0 er lengst sør, altså størst y — y synker når radnummeret stiger
+      let lo = 0, hi = rows.length-1;
+      while(lo < hi){ const m=(lo+hi)>>1; if(Y.top[m] > origin.y + size.y) lo=m+1; else hi=m; }
+      const last = rows.length-1;
+
+      for(let ri=Math.max(0,lo-1); ri<=last; ri+=rowStep){
         const r = rows[ri];
-        const yT = Math.round(map.project([r.lat+r.dLat/2, 0], z).y - origin.y);
-        const yB = Math.round(yT + rowPx*rowStep);
-        if(yB < 0 || yT > size.y) continue;
+        const yT = Math.round(Y.top[Math.min(ri+rowStep-1, last)] - origin.y);
+        const yB = Math.round(Y.bot[ri] - origin.y);
+        if(yB < 0) break;                        // forbi toppen av flisen
+        if(yT > size.y) continue;
         const h = Math.max(1, yB-yT);
         const w = r.dLon*sx;
         const lonMin = (origin.x - w*colStep)/sx - 180;
@@ -403,7 +423,7 @@
       return tile;
     }
   });
-  const cellLayer = new CellGrid({tileSize:256, updateWhenZooming:false}).addTo(map);
+  const cellLayer = new CellGrid({tileSize:256, updateWhenZooming:false, updateWhenIdle:true, keepBuffer:1}).addTo(map);
 
   const dLatB = RADIUS/111320;
   const dLonB = RADIUS/(111320*Math.cos(CENTER.lat*RAD));
@@ -776,33 +796,41 @@
     return rings.length ? rings : null;
   }
 
-  async function searchNominatim(q){
-    const r = await fetch('https://nominatim.openstreetmap.org/search?format=jsonv2'+
-            '&polygon_geojson=1&polygon_threshold=0.0008&limit=5&countrycodes=nl&q='+encodeURIComponent(q));
-    if(!r.ok) throw new Error('kartsøket svarte '+r.status);
-    return r.json();
+  /* Raskt, feiltolerant søk først. Grensen hentes bare for treffet dere velger. */
+  async function searchPlaces(q){
+    const url = 'https://photon.komoot.io/api/?limit=8&lat='+CENTER.lat+'&lon='+CENTER.lon+
+            '&q='+encodeURIComponent(q);
+    const r = await fetch(url);
+    if(!r.ok) throw new Error('søket svarte '+r.status);
+    const d = await r.json();
+    const list = (d.features||[]).map(f=>({
+      name: f.properties.name,
+      where: [f.properties.city, f.properties.county, f.properties.state, f.properties.country]
+              .filter(Boolean).join(', '),
+      cc: f.properties.countrycode,
+      osm: (f.properties.osm_type||'') + (f.properties.osm_id||''),
+      lat: f.geometry.coordinates[1],
+      lon: f.geometry.coordinates[0]
+    })).filter(x=>x.name);
+    const nl = list.filter(x=>x.cc==='NL');
+    return nl.length ? nl : list;
   }
 
-  async function searchPhoton(q){
-    const r = await fetch('https://photon.komoot.io/api/?limit=6&q='+encodeURIComponent(q));
-    if(!r.ok) throw new Error('reservesøket svarte '+r.status);
+  async function fetchRings(osm){
+    if(!osm || !/^[NWR]\d+$/.test(osm)) return null;
+    const r = await fetch('https://nominatim.openstreetmap.org/lookup?format=jsonv2'+
+            '&polygon_geojson=1&polygon_threshold=0.0008&osm_ids='+osm);
+    if(!r.ok) return null;
     const d = await r.json();
-    return (d.features||[]).map(f=>({
-      name: f.properties.name,
-      display_name: [f.properties.name, f.properties.city, f.properties.county, f.properties.state]
-              .filter(Boolean).join(', '),
-      lat: f.geometry.coordinates[1],
-      lon: f.geometry.coordinates[0],
-      geojson: null
-    }));
+    return d.length ? ringsOf(d[0].geojson) : null;
   }
 
   function addPlace(){
     form.style.display = 'block';
     form.innerHTML = `
     <h2>Søk opp et sted</h2>
-    <p>Skriv navnet på kommunen, byen, flyplassen eller stedet hintet handler om. Har stedet en grense i kartdataene, kan dere sperre av hele området.</p>
-    <input type="text" id="q" placeholder="f.eks. Gouda, Alphen aan den Rijn, Schiphol">
+    <p>Kommune, by, flyplass eller landemerke. Skrivefeil går som regel bra.</p>
+    <input type="text" id="q" placeholder="f.eks. Gouda, Schiphol, Alphen aan den Rijn">
     <div class="row" style="margin:10px 0 0">
       <button class="act warm" id="goBtn">Søk</button>
       <button class="act" id="mapBtn">Velg punkt på kartet</button>
@@ -812,75 +840,85 @@
     const res = form.querySelector('#res');
 
     form.querySelector('#mapBtn').onclick = ()=>{
-      pick0 = pts => choosePlace({name:'punktet', display_name:'valgt punkt',
-        lat:pts[0].lat, lon:pts[0].lon, geojson:null});
+      pick0 = pts => choosePlace({name:'punktet', where:'', osm:null,
+        lat:pts[0].lat, lon:pts[0].lon});
       startPick(1,'Trykk stedet hintet handler om.');
-    };
-
-    const show = list => {
-      res.innerHTML = '<p style="margin:14px 0 8px">Velg riktig treff:</p>';
-      for(const it of list){
-        const b = document.createElement('button');
-        b.className = 'tiny';
-        b.style.cssText = 'display:block;width:100%;text-align:left;margin-bottom:6px';
-        b.textContent = it.display_name + (it.geojson ? '' : ' · uten grense');
-        b.onclick = ()=>choosePlace(it);
-        res.appendChild(b);
-      }
     };
 
     const run = async ()=>{
       const q = form.querySelector('#q').value.trim();
       if(!q) return;
       res.innerHTML = '<p style="margin-top:12px">Søker …</p>';
-      let err = '';
       try{
-        const list = await searchNominatim(q);
-        if(list.length){ show(list); return; }
-        res.innerHTML = '<p style="margin-top:12px">Ingen treff. Prøv et annet navn.</p>';
-        return;
-      }catch(e){ err = e.message || 'ingen forbindelse'; }
-      try{
-        const list = await searchPhoton(q);
-        if(list.length){ show(list); return; }
-      }catch(e){ err += ', og reservesøket nådde ikke fram'; }
-      res.innerHTML = '<p style="margin-top:12px">Søket nådde ikke fram ('+err+'). '+
-              'Inne i Claude-visningen er utgående nett sperret — åpne appen fra https-adressen. '+
-              'Ellers: velg punkt på kartet, eller tegn området for hånd.</p>';
+        const list = await searchPlaces(q);
+        if(!list.length){ res.innerHTML = '<p style="margin-top:12px">Ingen treff. Prøv et annet navn.</p>'; return; }
+        res.innerHTML = '<p style="margin:14px 0 8px">Velg riktig treff:</p>';
+        for(const it of list){
+          const b = document.createElement('button');
+          b.className = 'tiny';
+          b.style.cssText = 'display:block;width:100%;text-align:left;margin-bottom:6px';
+          b.innerHTML = it.name + (it.where ? '<br><span style="opacity:.6">'+it.where+'</span>' : '');
+          b.onclick = ()=>choosePlace(it);
+          res.appendChild(b);
+        }
+      }catch(e){
+        res.innerHTML = '<p style="margin-top:12px">Søket nådde ikke fram ('+(e.message||'ingen forbindelse')+
+                '). Velg punkt på kartet i stedet, eller tegn området for hånd.</p>';
+      }
     };
 
     form.querySelector('#goBtn').onclick = run;
     form.querySelector('#q').addEventListener('keydown', e=>{ if(e.key==='Enter') run(); });
   }
 
-  function choosePlace(it){
-    const rings = ringsOf(it.geojson);
+  function choosePlace(it, from){
     const ref = {lat:+it.lat, lon:+it.lon};
-    const name = it.name || it.display_name.split(',')[0];
-    const meDist = me ? dist(me.lat, me.lon, ref.lat, ref.lon) : null;
+    const name = it.name;
+    const us = from || me;                       // der vi sto da hintet ble kjøpt
+    const usDist = us ? dist(us.lat, us.lon, ref.lat, ref.lon) : null;
 
+    form.style.display = 'block';
     form.innerHTML = `
     <h2>${name}</h2>
-    <p>${rings ? 'Matchen: er gjemmeteamet i dette området?' :
-            'Stedet har ingen grense i kartdataene, så bare avstandssvar kan brukes.'}</p>
-    <div class="row" style="margin-bottom:10px">
-      ${rings ? '<button class="tiny" id="inB">De er her</button><button class="tiny" id="outB">De er ikke her</button>' : ''}
+    <p>Zamenlijken: hvem er nærmest?</p>
+    <div class="row" style="margin-bottom:6px">
+      ${usDist ? '<button class="tiny" id="nearB">De er nærmere</button><button class="tiny" id="farB">Vi er nærmere</button>'
+            : '<button class="tiny" id="whereB">Marker hvor vi sto</button>'}
     </div>
-    <p>Zamenlijken: hvem er nærmest ${name}?</p>
-    <div class="row" style="margin-bottom:4px">
-      ${meDist ? '<button class="tiny" id="nearB">De er nærmere</button><button class="tiny" id="farB">Vi er nærmere</button>'
-            : '<span style="font-size:12.5px;color:rgba(15,30,43,.6)">Sett posisjonen din først for å bruke denne.</span>'}
-    </div>`;
+    <p style="margin:0 0 14px;font-size:12px">
+      ${usDist ? 'Vi var '+(usDist/1000).toFixed(1)+' km unna. '
+            +'<a href="#" id="otherA" style="color:var(--delft)">Vi sto et annet sted</a>'
+            : 'Trykk der dere sto da hintet ble kjøpt, så regner appen ut resten.'}
+    </p>
+    <p id="areaP">Matchen: henter grense …</p>
+    <div class="row" id="areaRow" style="margin:0"></div>`;
+    openSheet();
+
+    const markUs = ()=>{
+      pick0 = pts => choosePlace(it, pts[0]);
+      startPick(1,'Hvor sto dere da hintet ble kjøpt? Bruk min posisjon, eller trykk på kartet.');
+    };
+    if(!usDist) form.querySelector('#whereB').onclick = markUs;
+    else form.querySelector('#otherA').onclick = e => { e.preventDefault(); markUs(); };
 
     const add = c => { constraints.push({id:nextId++, on:true, name, ...c}); form.style.display='none'; recompute(); };
-    if(rings){
-      form.querySelector('#inB').onclick  = ()=>add({type:'geo', rings, keep:true});
-      form.querySelector('#outB').onclick = ()=>add({type:'geo', rings, keep:false});
+    if(usDist){
+      form.querySelector('#nearB').onclick = ()=>add({type:'closer', ref, refDist:usDist, closer:true});
+      form.querySelector('#farB').onclick  = ()=>add({type:'closer', ref, refDist:usDist, closer:false});
     }
-    if(meDist){
-      form.querySelector('#nearB').onclick = ()=>add({type:'closer', ref, refDist:meDist, closer:true});
-      form.querySelector('#farB').onclick  = ()=>add({type:'closer', ref, refDist:meDist, closer:false});
-    }
+
+    fetchRings(it.osm).then(rings=>{
+      const p = form.querySelector('#areaP'), row = form.querySelector('#areaRow');
+      if(!p || !row) return;
+      if(!rings){ p.textContent = 'Stedet har ingen grense i kartdataene — bruk avstand, eller tegn området for hånd.'; return; }
+      p.textContent = 'Matchen: er gjemmeteamet i dette området?';
+      row.innerHTML = '<button class="tiny" id="inB">De er her</button><button class="tiny" id="outB">De er ikke her</button>';
+      row.querySelector('#inB').onclick  = ()=>add({type:'geo', rings, keep:true});
+      row.querySelector('#outB').onclick = ()=>add({type:'geo', rings, keep:false});
+    }).catch(()=>{
+      const p = form.querySelector('#areaP');
+      if(p) p.textContent = 'Fikk ikke hentet grensen. Bruk avstand, eller tegn området for hånd.';
+    });
   }
 
   /* Strek — del brettet i to og velg siden gjemmeteamet er på */
