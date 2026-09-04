@@ -191,18 +191,18 @@
     return 6371000*2*Math.asin(Math.sqrt(s));
   }
 
-  /* ---------- Rutenett: 100 m, lagret radvis for fart ---------- */
-  const CELL_KM = 0.1;
-  let rows = [], alive = null, cellCount = 0;
+  /* ---------- Rutenett: 800 m grovruter, delt i 100 m der en kant går ---------- */
+  const COARSE_KM = 0.8, SUB = 8;          // 8x8 underruter = 100 m
+  let rows = [], coarseCount = 0;
 
   function buildGrid(){
     rows = [];
     let idx = 0;
-    const dLat = CELL_KM/111.32;
+    const dLat = COARSE_KM/111.32;
     const latSpan = RADIUS/111320 + dLat;
     for(let lat = CENTER.lat-latSpan; lat <= CENTER.lat+latSpan; lat += dLat){
       const k = Math.cos(lat*RAD);
-      const dLon = CELL_KM/(111.32*k);
+      const dLon = COARSE_KM/(111.32*k);
       const lonSpan = RADIUS/(111320*k) + dLon;
       const n = Math.ceil(2*lonSpan/dLon);
       let first = -1, last = -1;
@@ -216,9 +216,8 @@
         cols: last-first+1, start: idx});
       idx += last-first+1;
     }
-    cellCount = idx;
-    alive = new Uint8Array(cellCount);
-    if(typeof maskCache !== 'undefined') maskCache.clear();
+    coarseCount = idx;
+    if(typeof stateCache !== 'undefined') stateCache.clear();
     yCache = {z:null, top:null, bot:null};
   }
 
@@ -304,34 +303,76 @@
     return {n,s:s2,e,w};
   }
 
-  const maskCache = new Map();
+  /* For hver sperring: 1 = hele grovruta er åpen, 0 = hele er utelukket,
+     2 = kanten går tvers gjennom, og da regnes 64 underruter ut. */
+  const stateCache = new Map();
 
-  function maskFor(c){
-    if(maskCache.has(c.id)) return maskCache.get(c.id);
+  function stateFor(c){
+    if(stateCache.has(c.id)) return stateCache.get(c.id);
     if(c.type==='geo' && !c.bbox) c.bbox = bboxOf(c.rings);
     if(c.type==='poly' && !c.bbox) c.bbox = bboxOf([c.pts]);
-    const m = new Uint8Array(cellCount);
+
+    const st = new Uint8Array(coarseCount);
+    const sub = new Map();
     for(const r of rows){
+      const hLat = r.dLat/2, hLon = r.dLon/2;
       for(let i=0;i<r.cols;i++){
-        m[r.start+i] = keeps(c, r.lat, r.lon0 + i*r.dLon) ? 1 : 0;
+        const lon = r.lon0 + i*r.dLon, idx = r.start + i;
+        // ni prøvepunkter: hjørner, kantmidter og senter — nok til å fange en kant
+        let yes = 0;
+        for(let a=-1;a<=1;a++) for(let b=-1;b<=1;b++)
+          if(keeps(c, r.lat + a*hLat, lon + b*hLon)) yes++;
+        if(yes === 9){ st[idx] = 1; continue; }
+        if(yes === 0){ st[idx] = 0; continue; }
+        st[idx] = 2;
+        const arr = new Uint8Array(SUB*SUB);
+        for(let sy=0; sy<SUB; sy++){
+          const slat = r.lat - hLat + (sy+0.5)*r.dLat/SUB;
+          for(let sx=0; sx<SUB; sx++){
+            const slon = lon - hLon + (sx+0.5)*r.dLon/SUB;
+            arr[sy*SUB+sx] = keeps(c, slat, slon) ? 1 : 0;
+          }
+        }
+        sub.set(idx, arr);
       }
     }
-    maskCache.set(c.id, m);
-    return m;
+    const out = {st, sub};
+    stateCache.set(c.id, out);
+    return out;
   }
 
+  let coarse = null;              // 0 ute, 1 inne, 2 delvis
+  let subAlive = new Map();       // grovindeks -> Uint8Array(64)
+
   function recompute(){
-    const on = constraints.filter(c=>c.on);
-    const masks = on.map(maskFor);
-    let n=0;
-    alive.fill(1);
-    for(const m of masks)
-      for(let i=0;i<cellCount;i++) alive[i] &= m[i];
-    for(let i=0;i<cellCount;i++) n += alive[i];
+    const on = constraints.filter(c=>c.on).map(stateFor);
+    coarse = new Uint8Array(coarseCount);
+    subAlive = new Map();
+    const cellArea = COARSE_KM*COARSE_KM, subArea = cellArea/(SUB*SUB);
+    let area = 0;
+
+    for(let idx=0; idx<coarseCount; idx++){
+      let st = 1, parts = null;
+      for(const s of on){
+        const v = s.st[idx];
+        if(v === 0){ st = 0; break; }
+        if(v === 2){ st = 2; (parts || (parts = [])).push(s.sub.get(idx)); }
+      }
+      if(st === 1){ coarse[idx] = 1; area += cellArea; continue; }
+      if(st === 0){ coarse[idx] = 0; continue; }
+
+      const arr = new Uint8Array(SUB*SUB).fill(1);
+      for(const p of parts) for(let j=0;j<arr.length;j++) arr[j] &= p[j];
+      let n = 0; for(let j=0;j<arr.length;j++) n += arr[j];
+      if(n === 0){ coarse[idx] = 0; continue; }
+      if(n === arr.length){ coarse[idx] = 1; area += cellArea; continue; }
+      coarse[idx] = 2; subAlive.set(idx, arr); area += n*subArea;
+    }
+
     cellLayer.redraw();
     drawShapes();
     save();
-    updateStatus(n);
+    updateStatus(area);
     renderList();
   }
 
@@ -380,43 +421,72 @@
       const ctx = tile.getContext('2d');
       const origin = coords.scaleBy(size);
       const z = coords.z;
-      const sx = 256*Math.pow(2,z)/360;          // Mercator: x er lineær i lengdegrad
+      const sx = 256*Math.pow(2,z)/360;
       ctx.fillStyle = 'rgba(15,30,43,.40)';
 
-      if(!rows.length || !alive) return tile;      // kartet tegner første ruter før brettet er bygget
+      if(!rows.length || !coarse) return tile;
       const Y = rowYs(z);
-      const mid = rows[Math.floor(rows.length/2)];
-      const rowPx = Math.abs(Y.bot[0] - Y.top[0]);
-      const colPx = mid.dLon*sx;
-      const rowStep = Math.max(1, Math.ceil(1.1/rowPx));
-      const colStep = Math.max(1, Math.ceil(1.1/colPx));
-
-      // rad 0 er lengst sør, altså størst y — y synker når radnummeret stiger
-      let lo = 0, hi = rows.length-1;
-      while(lo < hi){ const m=(lo+hi)>>1; if(Y.top[m] > origin.y + size.y) lo=m+1; else hi=m; }
       const last = rows.length-1;
 
-      for(let ri=Math.max(0,lo-1); ri<=last; ri+=rowStep){
+      let lo = 0, hi = last;
+      while(lo < hi){ const m=(lo+hi)>>1; if(Y.top[m] > origin.y + size.y) lo=m+1; else hi=m; }
+
+      for(let ri=Math.max(0,lo-1); ri<=last; ri++){
         const r = rows[ri];
-        const yT = Math.round(Y.top[Math.min(ri+rowStep-1, last)] - origin.y);
+        const yT = Math.round(Y.top[ri] - origin.y);
         const yB = Math.round(Y.bot[ri] - origin.y);
-        if(yB < 0) break;                        // forbi toppen av flisen
+        if(yB < 0) break;
         if(yT > size.y) continue;
-        const h = Math.max(1, yB-yT);
+        const h = Math.max(1, yB - yT);
         const w = r.dLon*sx;
-        const lonMin = (origin.x - w*colStep)/sx - 180;
+        const lonMin = (origin.x - w)/sx - 180;
         const lonMax = (origin.x + size.x)/sx - 180;
         const i0 = Math.max(0, Math.floor((lonMin - r.lon0)/r.dLon));
         const i1 = Math.min(r.cols-1, Math.ceil((lonMax - r.lon0)/r.dLon));
+
         let runStart = -1;
-        for(let i=i0;i<=i1+colStep;i+=colStep){
-          const dead = i<=i1 && !alive[r.start+i];
-          if(dead && runStart<0) runStart = i;
-          if(!dead && runStart>=0){
-            const x1 = Math.round((r.lon0 + runStart*r.dLon + 180)*sx - origin.x);
-            const x2 = Math.round((r.lon0 + i*r.dLon + 180)*sx - origin.x);
+        for(let i=i0; i<=i1+1; i++){
+          const idx = r.start + i;
+          const st = i<=i1 ? coarse[idx] : 1;
+
+          if(st === 0){ if(runStart<0) runStart = i; continue; }
+
+          if(runStart >= 0){                       // tegn sammenhengende utelukket strekk
+            const x1 = Math.round((r.lon0 + (runStart-0.5)*r.dLon + 180)*sx - origin.x);
+            const x2 = Math.round((r.lon0 + (i-0.5)*r.dLon + 180)*sx - origin.x);
             ctx.fillRect(x1, yT, Math.max(1, x2-x1), h);
             runStart = -1;
+          }
+          if(st !== 2) continue;
+
+          const arr = subAlive.get(idx);
+          if(!arr) continue;
+          const x1 = Math.round((r.lon0 + (i-0.5)*r.dLon + 180)*sx - origin.x);
+          const x2 = Math.round((r.lon0 + (i+0.5)*r.dLon + 180)*sx - origin.x);
+          const cw = x2-x1;
+
+          if(cw < SUB || h < SUB){                 // for smått til å vise underruter
+            let dead = 0;
+            for(let j=0;j<arr.length;j++) if(!arr[j]) dead++;
+            if(dead*2 > arr.length) ctx.fillRect(x1, yT, Math.max(1,cw), h);
+            continue;
+          }
+          const sw = cw/SUB, sh = h/SUB;
+          for(let sy=0; sy<SUB; sy++){
+            // sy = 0 er sørligst, altså nederst. Kantene rundes likt oppe og nede,
+            // så naboruter deler kant og det ikke blir luft mellom dem.
+            const pyB = Math.round(yB - sy*sh);
+            const pyT = Math.round(yB - (sy+1)*sh);
+            let run = -1;
+            for(let sxi=0; sxi<=SUB; sxi++){
+              const dead = sxi<SUB && !arr[sy*SUB+sxi];
+              if(dead && run<0) run = sxi;
+              if(!dead && run>=0){
+                const ax = Math.round(x1 + run*sw), bx = Math.round(x1 + sxi*sw);
+                ctx.fillRect(ax, pyT, Math.max(1, bx-ax), Math.max(1, pyB-pyT));
+                run = -1;
+              }
+            }
           }
         }
       }
@@ -520,28 +590,49 @@
   }
 
   /* ---------- Status og gjett-forslag ---------- */
-  function updateStatus(n){
-    const areaCell = CELL_KM*CELL_KM;
-    const area = n*areaCell;
+  function updateStatus(area){
     document.getElementById('areaTxt').textContent =
-            n===0 ? 'Ingen treff' : (area>=100 ? Math.round(area)+' km²' : area.toFixed(1)+' km²');
+            area<=0 ? 'Ingen treff'
+                    : (area>=100 ? Math.round(area)+' km²' : area.toFixed(2)+' km²');
     document.getElementById('cellTxt').textContent =
-            n===0 ? 'sperringene motsier hverandre' : 'åpent — skygge er utelukket';
+            area<=0 ? 'sperringene motsier hverandre' : 'åpent — skygge er utelukket';
 
     if(guessCircle){ map.removeLayer(guessCircle); guessCircle=null; }
-    if(n===0){ guessInfo=null; renderGuess(); return; }
+    if(area<=0){ guessInfo=null; renderGuess(); return; }
 
-    let sLat=0,sLon=0;
-    for(const row of rows) for(let i=0;i<row.cols;i++) if(alive[row.start+i]){
-      sLat += row.lat; sLon += row.lon0 + i*row.dLon;
+    let sLat=0, sLon=0, w=0;
+    const pts = [];
+    for(const row of rows){
+      for(let i=0;i<row.cols;i++){
+        const idx = row.start+i, st = coarse[idx];
+        if(!st) continue;
+        const lon = row.lon0 + i*row.dLon;
+        if(st === 1){
+          sLat += row.lat*64; sLon += lon*64; w += 64;
+          pts.push([row.lat, lon, COARSE_KM*707]);
+        }else{
+          const arr = subAlive.get(idx);
+          if(!arr) continue;
+          for(let sy=0; sy<SUB; sy++){
+            const slat = row.lat - row.dLat/2 + (sy+0.5)*row.dLat/SUB;
+            for(let sxi=0; sxi<SUB; sxi++){
+              if(!arr[sy*SUB+sxi]) continue;
+              const slon = lon - row.dLon/2 + (sxi+0.5)*row.dLon/SUB;
+              sLat += slat; sLon += slon; w++;
+              pts.push([slat, slon, 71]);
+            }
+          }
+        }
+      }
     }
-    const cLat=sLat/n, cLon=sLon/n;
-    let r=0;
-    for(const row of rows) for(let i=0;i<row.cols;i++) if(alive[row.start+i]){
-      const d = dist(cLat, cLon, row.lat, row.lon0 + i*row.dLon);
-      if(d>r) r=d;
+    if(!w){ guessInfo=null; renderGuess(); return; }
+
+    const cLat = sLat/w, cLon = sLon/w;
+    let r = 0;
+    for(const q of pts){
+      const d = dist(cLat, cLon, q[0], q[1]) + q[2];
+      if(d > r) r = d;
     }
-    r += CELL_KM*500;
     guessCircle = L.circle([cLat,cLon],{radius:r,color:'#1F7A5A',weight:2,fillOpacity:.05}).addTo(map);
     guessInfo = {lat:cLat, lon:cLon, r};
     renderGuess();
@@ -570,10 +661,7 @@
     }, 8000);
   };
 
-  function updateStatusGuessOnly(){
-    let n=0; for(let i=0;i<alive.length;i++) n+=alive[i];
-    updateStatus(n);
-  }
+  function updateStatusGuessOnly(){ recompute(); }
 
   /* ---------- Skjema for nye sperringer ---------- */
   const form = document.getElementById('form');
@@ -1019,7 +1107,7 @@
       li.querySelector('.eye').onclick = () => { c.on = !c.on; recompute(); };
       li.querySelector('.del').onclick = () => {
         ask('Fjerne «'+label(c)+'»?', ()=>{
-          maskCache.delete(c.id);
+          stateCache.delete(c.id);
           constraints = constraints.filter(x => x !== c);
           recompute();
         });
