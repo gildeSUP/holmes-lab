@@ -12,6 +12,10 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
   <meta name="apple-mobile-web-app-title" content="Edison">
   <title>Edison</title>
+  <link rel="preconnect" href="https://cdnjs.cloudflare.com" crossorigin>
+  <link rel="preconnect" href="https://a.tile.openstreetmap.org">
+  <link rel="preconnect" href="https://b.tile.openstreetmap.org">
+  <link rel="preconnect" href="https://c.tile.openstreetmap.org">
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
   <style>
     :root{
@@ -28,6 +32,12 @@
       font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
       color:var(--ink);-webkit-text-size-adjust:100%}
     #map{position:absolute;inset:0}
+    #boot{position:absolute;inset:0;z-index:2000;background:var(--ink);
+      display:flex;flex-direction:column;align-items:center;justify-content:center;gap:16px;
+      transition:opacity .3s ease}
+    #boot.gone{opacity:0;pointer-events:none}
+    #boot img{width:88px;height:88px;border-radius:20px;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+    #boot p{color:var(--paper);font-size:13px;opacity:.75;margin:0}
     .leaflet-container{background:#dfe6ea;font:inherit}
 
     /* Toppstripe med status */
@@ -125,6 +135,10 @@
 </head>
 <body>
 <div id="map"></div>
+<div id="boot">
+  <img src="ikon.png" alt="">
+  <p>Laster kartet …</p>
+</div>
 
 <div id="status">
   <b id="areaTxt">—</b>
@@ -429,9 +443,16 @@
   const map = L.map('map',{zoomControl:false, attributionControl:true})
           .setView([CENTER.lat,CENTER.lon], 9);
   L.control.zoom({position:'bottomleft'}).addTo(map);
-  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+  const baseLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
     maxZoom:19, attribution:'© OpenStreetMap'
   }).addTo(map);
+  let bootGone = false;
+  function hideBoot(){
+    if(bootGone) return; bootGone = true;
+    document.getElementById('boot').classList.add('gone');
+  }
+  baseLayer.on('load', hideBoot);
+  setTimeout(hideBoot, 4000);   // ikke la et tregt nett holde skjermen skjult for evig
 
   L.circle([CENTER.lat,CENTER.lon],{radius:RADIUS,color:'#0F1E2B',weight:2,
     dashArray:'6 5',fill:false}).addTo(map);
@@ -668,7 +689,6 @@
       const d = dist(cLat, cLon, q[0], q[1]) + q[2];
       if(d > r) r = d;
     }
-    guessCircle = L.circle([cLat,cLon],{radius:r,color:'#1F7A5A',weight:2,fillOpacity:.05}).addTo(map);
     guessInfo = {lat:cLat, lon:cLon, r};
     renderGuess();
   }
