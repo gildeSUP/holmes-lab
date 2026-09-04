@@ -618,9 +618,10 @@
         L.circleMarker([c.lat,c.lon],{radius:4,color:style.color,fillOpacity:1}).addTo(shapes);
       }
       if(c.type==='tampen'){
-        L.polyline([[c.a.lat,c.a.lon],[c.b.lat,c.b.lon]],{color:style.color,weight:2,dashArray:'4 4'}).addTo(shapes);
-        L.circleMarker([c.a.lat,c.a.lon],{radius:4,color:style.color,fillOpacity:1}).addTo(shapes);
-        L.circleMarker([c.b.lat,c.b.lon],{radius:6,color:style.color,fillOpacity:.35}).addTo(shapes);
+        const tc = c.on ? '#2C5A8C' : '#9aa5ad';   // blå, ikke oransje — så den ikke blandes med Strek
+        L.polyline([[c.a.lat,c.a.lon],[c.b.lat,c.b.lon]],{color:tc,weight:2,dashArray:'4 4'}).addTo(shapes);
+        L.circleMarker([c.a.lat,c.a.lon],{radius:4,color:tc,fillOpacity:1}).addTo(shapes);
+        L.circleMarker([c.b.lat,c.b.lon],{radius:6,color:tc,fillOpacity:.35}).addTo(shapes);
       }
       if(c.type==='geo'){
         for(const ring of c.rings)
@@ -631,13 +632,20 @@
         L.circleMarker([c.ref.lat,c.ref.lon],{radius:4,color:style.color,fillOpacity:1}).addTo(shapes);
       }
       if(c.type==='line'){
+        // Mange punkter langs linjen, ikke bare de to ytterpunktene — ellers
+        // kutter Leaflet rett strek i skjermpiksler mellom to fjerne punkter,
+        // og den rette streken i kartprojeksjonen bommer på de faktiske
+        // GPS-punktene et sted i midten.
         const dLat = c.b.lat-c.a.lat, dLon = c.b.lon-c.a.lon;
-        const f = 8;
-        L.polyline([
-          [c.a.lat - dLat*f, c.a.lon - dLon*f],
-          [c.b.lat + dLat*f, c.b.lon + dLon*f]
-        ],{color:style.color, weight:2}).addTo(shapes);
-        L.polyline([[c.a.lat,c.a.lon],[c.b.lat,c.b.lon]],{color:style.color,weight:4}).addTo(shapes);
+        const f = 8, N = 24;
+        const path = [];
+        for(let i=0;i<=N;i++){
+          const t = -f + (1+2*f)*(i/N);
+          path.push([c.a.lat + t*dLat, c.a.lon + t*dLon]);
+        }
+        L.polyline(path, {color:style.color, weight:3}).addTo(shapes);
+        L.circleMarker([c.a.lat,c.a.lon],{radius:4,color:style.color,fillOpacity:1}).addTo(shapes);
+        L.circleMarker([c.b.lat,c.b.lon],{radius:4,color:style.color,fillOpacity:1}).addTo(shapes);
       }
       if(c.type==='poly'){
         L.polygon(c.pts.map(p=>[p.lat,p.lon]),{...style,fill:false}).addTo(shapes);
@@ -799,7 +807,10 @@
       const ib=form.querySelector('#inBtn'), ob=form.querySelector('#outBtn');
       ib.onclick=()=>{inside=true;ib.classList.add('sel');ob.classList.remove('sel')};
       ob.onclick=()=>{inside=false;ob.classList.add('sel');ib.classList.remove('sel')};
-      form.querySelector('#okBtn').onclick=()=>{
+      const okBtn = form.querySelector('#okBtn');
+      okBtn.onclick=()=>{
+        if(okBtn.disabled) return;
+        okBtn.disabled = true;
         const d = +form.querySelector('#mVal').value;
         if(!(d>0)) return;
         constraints.push({id:nextId++,type:'radar',on:true,lat:p.lat,lon:p.lon,dist:d,inside});
@@ -876,7 +887,10 @@
     const wb=form.querySelector('#wBtn'), cb=form.querySelector('#cBtn');
     wb.onclick=()=>{warmer=true;wb.classList.add('sel');cb.classList.remove('sel')};
     cb.onclick=()=>{warmer=false;cb.classList.add('sel');wb.classList.remove('sel')};
-    form.querySelector('#okBtn').onclick=()=>{
+    const okBtn = form.querySelector('#okBtn');
+    okBtn.onclick=()=>{
+      if(okBtn.disabled) return;
+      okBtn.disabled = true;
       constraints.push({id:nextId++,type:'tampen',on:true,a,b,warmer});
       tampen = null; drawTampen(); tampenCard(); updateTampenBtn(); save();
       form.style.display='none'; recompute();
@@ -1083,7 +1097,10 @@
       const lb=form.querySelector('#lBtn'), rb=form.querySelector('#rBtn');
       lb.onclick=()=>{left=true;lb.classList.add('sel');rb.classList.remove('sel')};
       rb.onclick=()=>{left=false;rb.classList.add('sel');lb.classList.remove('sel')};
-      form.querySelector('#okBtn').onclick=()=>{
+      const okBtn = form.querySelector('#okBtn');
+      okBtn.onclick=()=>{
+        if(okBtn.disabled) return;
+        okBtn.disabled = true;
         constraints.push({id:nextId++,type:'line',on:true,a,b,left});
         form.style.display='none'; recompute();
       };
@@ -1118,7 +1135,10 @@
       const kb=form.querySelector('#kBtn'), eb=form.querySelector('#eBtn');
       kb.onclick=()=>{keep=true;kb.classList.add('sel');eb.classList.remove('sel')};
       eb.onclick=()=>{keep=false;eb.classList.add('sel');kb.classList.remove('sel')};
-      form.querySelector('#okBtn').onclick=()=>{
+      const okBtn = form.querySelector('#okBtn');
+      okBtn.onclick=()=>{
+        if(okBtn.disabled) return;
+        okBtn.disabled = true;
         constraints.push({id:nextId++,type:'poly',on:true,pts,keep});
         form.style.display='none'; recompute();
       };
@@ -1143,10 +1163,12 @@
   }
   function sub(c){
     if(c.type==='radar') return 'fra '+c.lat.toFixed(4)+', '+c.lon.toFixed(4);
-    if(c.type==='tampen') return 'flyttet '+(dist(c.a.lat,c.a.lon,c.b.lat,c.b.lon)/1000).toFixed(1)+' km';
+    if(c.type==='tampen') return 'flyttet '+(dist(c.a.lat,c.a.lon,c.b.lat,c.b.lon)/1000).toFixed(1)+' km · '
+            +c.a.lat.toFixed(4)+','+c.a.lon.toFixed(4)+' → '+c.b.lat.toFixed(4)+','+c.b.lon.toFixed(4);
     if(c.type==='geo') return 'område hentet fra kartdata';
     if(c.type==='closer') return 'vi var '+(c.refDist/1000).toFixed(1)+' km unna';
-    if(c.type==='line') return 'delelinje gjennom '+c.a.lat.toFixed(3)+', '+c.a.lon.toFixed(3);
+    if(c.type==='line') return 'gjennom '+c.a.lat.toFixed(4)+','+c.a.lon.toFixed(4)+' og '
+            +c.b.lat.toFixed(4)+','+c.b.lon.toFixed(4);
     if(c.type==='poly') return c.pts.length+' hjørner';
   }
   function renderList(){
