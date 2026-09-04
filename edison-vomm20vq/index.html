@@ -5,7 +5,13 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <meta name="robots" content="noindex, nofollow, noarchive, nosnippet">
 <meta name="referrer" content="no-referrer">
-<title>Peileren</title>
+<link rel="apple-touch-icon" href="ikon.png">
+<link rel="icon" href="ikon.png">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Edison">
+<title>Edison</title>
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
 <style>
   :root{
@@ -25,7 +31,7 @@
   .leaflet-container{background:#dfe6ea;font:inherit}
 
   /* Toppstripe med status */
-  #status{position:absolute;top:0;left:0;right:0;z-index:600;
+  #status{position:absolute;top:0;left:0;right:0;z-index:1000;
     background:var(--ink);color:var(--paper);
     padding:5px 12px 6px;padding-top:calc(5px + env(safe-area-inset-top,0));
     display:flex;gap:10px;align-items:baseline;
@@ -40,7 +46,7 @@
   #status.big .guess{margin-left:auto;text-align:right}
 
   /* Instruksjonsbanner under toppstripa */
-  #hintbar{position:absolute;left:8px;right:8px;z-index:600;
+  #hintbar{position:absolute;left:8px;right:8px;z-index:1100;
     background:var(--oranje);color:#fff;border-radius:10px;
     padding:9px 12px;font-size:13.5px;line-height:1.35;display:none;
     box-shadow:0 6px 18px rgba(15,30,43,.25)}
@@ -49,7 +55,7 @@
     border-radius:7px;padding:5px 10px;font:inherit;font-size:12.5px}
 
   /* Bunnpanel */
-  #sheet{position:absolute;left:0;right:0;bottom:0;z-index:600;
+  #sheet{position:absolute;left:0;right:0;bottom:0;z-index:1000;
     background:var(--paper);border-radius:16px 16px 0 0;
     box-shadow:0 -8px 26px rgba(15,30,43,.3);
     max-height:72%;display:flex;flex-direction:column;
@@ -97,7 +103,7 @@
   ul#list .txt{cursor:pointer}
   .empty{font-size:13px;color:rgba(15,30,43,.6);line-height:1.5;padding:6px 0 2px}
 
-  #ask{position:absolute;inset:0;z-index:900;display:none;
+  #ask{position:absolute;inset:0;z-index:1200;display:none;
     background:rgba(15,30,43,.55);align-items:center;justify-content:center;padding:24px}
   #ask.on{display:flex}
   #ask .box{background:var(--paper);border-radius:14px;padding:18px;max-width:340px;width:100%;
@@ -108,8 +114,9 @@
   .mapbtn{position:absolute;z-index:590;width:44px;height:44px;border-radius:22px;border:0;
     background:var(--paper);color:var(--ink);font-size:19px;
     box-shadow:0 3px 10px rgba(15,30,43,.3)}
-  .leaflet-bottom.leaflet-left{margin-bottom:74px}
-  .leaflet-control-attribution{margin-bottom:66px !important;font-size:10px}
+  .leaflet-control{z-index:400 !important}
+  .leaflet-bottom.leaflet-left{margin-bottom:70px}
+  .leaflet-control-attribution{margin-bottom:64px !important;font-size:10px;opacity:.85}
   #locBtn{right:10px;bottom:82px}
   #fitBtn{right:10px;bottom:132px}
 </style>
@@ -212,6 +219,7 @@ function buildGrid(){
   }
   cellCount = idx;
   alive = new Uint8Array(cellCount);
+  if(typeof maskCache !== 'undefined') maskCache.clear();
 }
 
 /* ---------- Sperringer ---------- */
@@ -296,21 +304,30 @@ function bboxOf(rings){
   return {n,s:s2,e,w};
 }
 
-function recompute(){
-  const on = constraints.filter(c=>c.on);
-  for(const c of on){
-    if(c.type==='geo' && !c.bbox) c.bbox = bboxOf(c.rings);
-    if(c.type==='poly' && !c.bbox) c.bbox = bboxOf([c.pts]);
-  }
-  let n=0;
+const maskCache = new Map();
+
+function maskFor(c){
+  if(maskCache.has(c.id)) return maskCache.get(c.id);
+  if(c.type==='geo' && !c.bbox) c.bbox = bboxOf(c.rings);
+  if(c.type==='poly' && !c.bbox) c.bbox = bboxOf([c.pts]);
+  const m = new Uint8Array(cellCount);
   for(const r of rows){
     for(let i=0;i<r.cols;i++){
-      const lon = r.lon0 + i*r.dLon;
-      let ok=1;
-      for(const con of on){ if(!keeps(con, r.lat, lon)){ ok=0; break; } }
-      alive[r.start+i]=ok; n+=ok;
+      m[r.start+i] = keeps(c, r.lat, r.lon0 + i*r.dLon) ? 1 : 0;
     }
   }
+  maskCache.set(c.id, m);
+  return m;
+}
+
+function recompute(){
+  const on = constraints.filter(c=>c.on);
+  const masks = on.map(maskFor);
+  let n=0;
+  alive.fill(1);
+  for(const m of masks)
+    for(let i=0;i<cellCount;i++) alive[i] &= m[i];
+  for(let i=0;i<cellCount;i++) n += alive[i];
   cellLayer.redraw();
   drawShapes();
   save();
@@ -740,7 +757,7 @@ function ringsOf(gj){
 
 async function searchNominatim(q){
   const r = await fetch('https://nominatim.openstreetmap.org/search?format=jsonv2'+
-    '&polygon_geojson=1&limit=6&countrycodes=nl&q='+encodeURIComponent(q));
+    '&polygon_geojson=1&polygon_threshold=0.0008&limit=5&countrycodes=nl&q='+encodeURIComponent(q));
   if(!r.ok) throw new Error('kartsøket svarte '+r.status);
   return r.json();
 }
@@ -943,6 +960,7 @@ function renderList(){
     li.querySelector('.eye').onclick = () => { c.on = !c.on; recompute(); };
     li.querySelector('.del').onclick = () => {
       ask('Fjerne «'+label(c)+'»?', ()=>{
+        maskCache.delete(c.id);
         constraints = constraints.filter(x => x !== c);
         recompute();
       });
