@@ -1,0 +1,1040 @@
+<!DOCTYPE html>
+<html lang="nb">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="robots" content="noindex, nofollow, noarchive, nosnippet">
+<meta name="referrer" content="no-referrer">
+<title>Peileren</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+  :root{
+    --ink:#0F1E2B;
+    --paper:#F3F0E7;
+    --delft:#2C5A8C;
+    --delft-soft:rgba(44,90,140,.38);
+    --oranje:#E4632B;
+    --line:rgba(15,30,43,.14);
+    --ok:#1F7A5A;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;height:100%;overflow:hidden;background:var(--ink);
+    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    color:var(--ink);-webkit-text-size-adjust:100%}
+  #map{position:absolute;inset:0}
+  .leaflet-container{background:#dfe6ea;font:inherit}
+
+  /* Toppstripe med status */
+  #status{position:absolute;top:0;left:0;right:0;z-index:600;
+    background:var(--ink);color:var(--paper);
+    padding:5px 12px 6px;padding-top:calc(5px + env(safe-area-inset-top,0));
+    display:flex;gap:10px;align-items:baseline;
+    white-space:nowrap;overflow:hidden;font-size:12.5px;line-height:1.4}
+  #status b{font-size:15px;font-weight:600;letter-spacing:-.02em}
+  #status span{opacity:.75}
+  #status #cellTxt{display:none}
+  #status #meTxt{display:none}
+  #status.big{white-space:normal;flex-wrap:wrap;padding-bottom:9px}
+  #status.big b{font-size:19px}
+  #status.big #cellTxt{display:inline}
+  #status.big .guess{margin-left:auto;text-align:right}
+
+  /* Instruksjonsbanner under toppstripa */
+  #hintbar{position:absolute;left:8px;right:8px;z-index:600;
+    background:var(--oranje);color:#fff;border-radius:10px;
+    padding:9px 12px;font-size:13.5px;line-height:1.35;display:none;
+    box-shadow:0 6px 18px rgba(15,30,43,.25)}
+  #hintbar.on{display:block}
+  #hintbar button{margin-left:8px;background:rgba(255,255,255,.2);border:0;color:#fff;
+    border-radius:7px;padding:5px 10px;font:inherit;font-size:12.5px}
+
+  /* Bunnpanel */
+  #sheet{position:absolute;left:0;right:0;bottom:0;z-index:600;
+    background:var(--paper);border-radius:16px 16px 0 0;
+    box-shadow:0 -8px 26px rgba(15,30,43,.3);
+    max-height:72%;display:flex;flex-direction:column;
+    transform:translateY(calc(100% - 62px));transition:transform .22s ease;
+    padding-bottom:env(safe-area-inset-bottom,0)}
+  #sheet.open{transform:translateY(0)}
+  @media (prefers-reduced-motion:reduce){#sheet{transition:none}}
+  #gps{padding:10px 16px 0;font-size:12px;line-height:1.4;color:rgba(15,30,43,.62)}
+  #gps:empty{display:none}
+  #grip{padding:12px 16px 11px;display:flex;align-items:center;gap:10px;cursor:pointer;
+    border-bottom:1px solid var(--line)}
+  #grip .bar{width:34px;height:4px;border-radius:2px;background:rgba(15,30,43,.25)}
+  #grip h1{font-size:15px;margin:0;font-weight:600;letter-spacing:-.01em}
+  #grip .count{margin-left:auto;font-size:12.5px;color:rgba(15,30,43,.6)}
+  #body{overflow:auto;padding:12px 16px 20px;-webkit-overflow-scrolling:touch}
+
+  .row{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}
+  button.act{flex:1 1 auto;min-width:104px;border:1px solid var(--ink);background:transparent;
+    color:var(--ink);border-radius:9px;padding:11px 10px;font:inherit;font-size:13.5px;font-weight:500}
+  button.act.primary{background:var(--ink);color:var(--paper)}
+  button.act.warm{background:var(--oranje);border-color:var(--oranje);color:#fff}
+  button.act:active{opacity:.7}
+  button.tiny{border:1px solid var(--line);background:#fff;border-radius:7px;
+    padding:7px 10px;font:inherit;font-size:12.5px;color:var(--ink)}
+  button.tiny.sel{background:var(--delft);border-color:var(--delft);color:#fff}
+
+  .card{border:1px solid var(--line);background:#fff;border-radius:11px;padding:12px;margin-bottom:10px}
+  .card h2{margin:0 0 8px;font-size:13.5px;font-weight:600}
+  .card p{margin:0 0 10px;font-size:12.5px;line-height:1.45;color:rgba(15,30,43,.7)}
+  label{display:block;font-size:12.5px;margin-bottom:5px;color:rgba(15,30,43,.7)}
+  input[type=number],input[type=text],textarea,select{width:100%;border:1px solid var(--line);
+    border-radius:8px;padding:10px;font:inherit;font-size:15px;background:#fff;color:var(--ink)}
+  textarea{font-size:11px;height:88px;font-family:ui-monospace,Menlo,Consolas,monospace}
+
+  ul#list{list-style:none;margin:0;padding:0}
+  ul#list li{display:flex;gap:10px;align-items:flex-start;padding:10px 0;border-bottom:1px solid var(--line)}
+  ul#list li:last-child{border-bottom:0}
+  ul#list .txt{flex:1;font-size:13px;line-height:1.4}
+  ul#list .txt small{display:block;color:rgba(15,30,43,.55);font-size:11.5px;margin-top:2px}
+  ul#list li.off .txt{opacity:.42;text-decoration:line-through}
+  ul#list .del{flex:0 0 auto;align-self:center;color:var(--oranje);border-color:rgba(228,99,43,.45)}
+  ul#list .eye{flex:0 0 auto;width:26px;height:26px;border-radius:13px;display:grid;place-items:center;
+    font-size:12px;color:#fff;background:var(--delft);align-self:center}
+  ul#list li.off .eye{background:transparent;color:rgba(15,30,43,.4);border:1px solid var(--line)}
+  ul#list .txt{cursor:pointer}
+  .empty{font-size:13px;color:rgba(15,30,43,.6);line-height:1.5;padding:6px 0 2px}
+
+  #ask{position:absolute;inset:0;z-index:900;display:none;
+    background:rgba(15,30,43,.55);align-items:center;justify-content:center;padding:24px}
+  #ask.on{display:flex}
+  #ask .box{background:var(--paper);border-radius:14px;padding:18px;max-width:340px;width:100%;
+    box-shadow:0 12px 40px rgba(15,30,43,.4)}
+  #ask p{margin:0 0 14px;font-size:14.5px;line-height:1.45}
+
+  /* Kartknapper */
+  .mapbtn{position:absolute;z-index:590;width:44px;height:44px;border-radius:22px;border:0;
+    background:var(--paper);color:var(--ink);font-size:19px;
+    box-shadow:0 3px 10px rgba(15,30,43,.3)}
+  .leaflet-bottom.leaflet-left{margin-bottom:74px}
+  .leaflet-control-attribution{margin-bottom:66px !important;font-size:10px}
+  #locBtn{right:10px;bottom:82px}
+  #fitBtn{right:10px;bottom:132px}
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div id="status">
+  <b id="areaTxt">—</b>
+  <span id="cellTxt">mulig område igjen</span>
+  <span class="guess" id="guessTxt"></span>
+</div>
+
+<div id="ask">
+  <div class="box">
+    <p id="askTxt"></p>
+    <div class="row" style="margin:0">
+      <button class="act" id="askNo">Avbryt</button>
+      <button class="act warm" id="askYes">Ja</button>
+    </div>
+  </div>
+</div>
+
+<div id="hintbar"><span id="hintTxt"></span><button id="useMeBtn">Min posisjon</button><button id="cancelBtn">Avbryt</button></div>
+
+<button class="mapbtn" id="locBtn" title="Min posisjon">◎</button>
+<button class="mapbtn" id="fitBtn" title="Zoom til området">⤢</button>
+
+<div id="sheet">
+  <div id="gps"><span id="meTxt"></span></div>
+  <div id="grip">
+    <div class="bar"></div>
+    <h1>Sperringer</h1>
+    <span class="count" id="countTxt">0 aktive</span>
+  </div>
+  <div id="body">
+    <div class="row">
+      <button class="act primary" data-add="radar">Avstand</button>
+      <button class="act primary" data-add="line">Strek</button>
+      <button class="act primary" data-add="tampen">Tampen brenner</button>
+      <button class="act primary" data-add="place">Søk kommune/sted</button>
+      <button class="act primary" data-add="poly">Tegn område</button>
+    </div>
+    <div class="row">
+      <button class="act" id="setMeBtn">Sett posisjon uten GPS</button>
+    </div>
+
+    <div class="card" id="form" style="display:none"></div>
+
+    <div class="row" id="bulkRow" style="display:none">
+      <button class="act" id="allOnBtn">Vis alle</button>
+      <button class="act" id="allOffBtn">Skjul alle</button>
+    </div>
+    <ul id="list"></ul>
+    <p class="empty" id="emptyTxt">Ingen sperringer ennå. Hvert hint dere kjøper blir en sperring — kartet viser hvor gjemmeteamet fortsatt kan være.</p>
+
+    <div class="row" style="margin-top:14px">
+      <button class="act" id="newRoundBtn">Ny gjemming</button>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+/* ---------- Spillebrettet ---------- */
+const CENTER = {lat:52.055, lon:4.78};
+const RADIUS = 54000;
+const RAD = Math.PI/180;
+
+function dist(aLat,aLon,bLat,bLon){            // meter, haversine
+  const dLat=(bLat-aLat)*RAD, dLon=(bLon-aLon)*RAD;
+  const s=Math.sin(dLat/2)**2 + Math.cos(aLat*RAD)*Math.cos(bLat*RAD)*Math.sin(dLon/2)**2;
+  return 6371000*2*Math.asin(Math.sqrt(s));
+}
+
+/* ---------- Rutenett: 100 m, lagret radvis for fart ---------- */
+const CELL_KM = 0.1;
+let rows = [], alive = null, cellCount = 0;
+
+function buildGrid(){
+  rows = [];
+  let idx = 0;
+  const dLat = CELL_KM/111.32;
+  const latSpan = RADIUS/111320 + dLat;
+  for(let lat = CENTER.lat-latSpan; lat <= CENTER.lat+latSpan; lat += dLat){
+    const k = Math.cos(lat*RAD);
+    const dLon = CELL_KM/(111.32*k);
+    const lonSpan = RADIUS/(111320*k) + dLon;
+    const n = Math.ceil(2*lonSpan/dLon);
+    let first = -1, last = -1;
+    for(let i=0;i<n;i++){
+      const lon = CENTER.lon - lonSpan + i*dLon;
+      if(dist(CENTER.lat, CENTER.lon, lat, lon) <= RADIUS){ if(first<0) first=i; last=i; }
+    }
+    if(first < 0) continue;
+    rows.push({lat, dLat, dLon,
+      lon0: CENTER.lon - lonSpan + first*dLon,
+      cols: last-first+1, start: idx});
+    idx += last-first+1;
+  }
+  cellCount = idx;
+  alive = new Uint8Array(cellCount);
+}
+
+/* ---------- Sperringer ---------- */
+let constraints = [];   // {id,type,on,...}
+let nextId = 1;
+
+function inPoly(lat,lon,pts){
+  let hit=false;
+  for(let i=0,j=pts.length-1;i<pts.length;j=i++){
+    const yi=pts[i].lat, xi=pts[i].lon, yj=pts[j].lat, xj=pts[j].lon;
+    if(((yi>lat)!==(yj>lat)) && (lon < (xj-xi)*(lat-yi)/(yj-yi)+xi)) hit=!hit;
+  }
+  return hit;
+}
+
+function sideOf(a, b, lat, lon){
+  const k = Math.cos(a.lat*RAD);
+  const ex = (b.lon-a.lon)*k, ey = b.lat-a.lat;
+  const dx = (lon-a.lon)*k,   dy = lat-a.lat;
+  return ex*dy - ey*dx;          // positivt = venstre for retningen a→b
+}
+
+const COMPASS = ['nord','nordøst','øst','sørøst','sør','sørvest','vest','nordvest'];
+function sideName(a, b, left){
+  const k = Math.cos(a.lat*RAD);
+  let ex = (b.lon-a.lon)*k, ey = b.lat-a.lat;
+  const n = left ? {e:-ey, nr:ex} : {e:ey, nr:-ex};
+  const deg = (Math.atan2(n.e, n.nr)*180/Math.PI + 360) % 360;
+  return COMPASS[Math.round(deg/45) % 8];
+}
+
+function inRings(lat, lon, rings){
+  let hit = false;
+  for(const ring of rings){
+    for(let i=0,j=ring.length-1;i<ring.length;j=i++){
+      const yi=ring[i].lat, xi=ring[i].lon, yj=ring[j].lat, xj=ring[j].lon;
+      if(((yi>lat)!==(yj>lat)) && (lon < (xj-xi)*(lat-yi)/(yj-yi)+xi)) hit=!hit;
+    }
+  }
+  return hit;
+}
+
+function keeps(c, lat, lon){
+  if(c.type==='geo'){
+    const b = c.bbox;
+    if(b && (lat<b.s || lat>b.n || lon<b.w || lon>b.e)) return !c.keep;
+    const inside = inRings(lat, lon, c.rings);
+    return c.keep ? inside : !inside;
+  }
+  if(c.type==='closer'){
+    const d = dist(c.ref.lat, c.ref.lon, lat, lon);
+    return c.closer ? d < c.refDist : d > c.refDist;
+  }
+  if(c.type==='line'){
+    const v = sideOf(c.a, c.b, lat, lon);
+    return c.left ? v > 0 : v < 0;
+  }
+  if(c.type==='radar'){
+    const d = dist(c.lat,c.lon,lat,lon);
+    return c.inside ? d <= c.dist : d > c.dist;
+  }
+  if(c.type==='tampen'){
+    const dA = dist(c.a.lat,c.a.lon,lat,lon);
+    const dB = dist(c.b.lat,c.b.lon,lat,lon);
+    return c.warmer ? dB < dA : dB > dA;
+  }
+  if(c.type==='poly'){
+    const b = c.bbox;
+    if(b && (lat<b.s || lat>b.n || lon<b.w || lon>b.e)) return !c.keep;
+    const inside = inPoly(lat,lon,c.pts);
+    return c.keep ? inside : !inside;
+  }
+  return true;
+}
+
+function bboxOf(rings){
+  let n=-90,s2=90,e=-180,w=180;
+  for(const ring of rings) for(const q of ring){
+    if(q.lat>n)n=q.lat; if(q.lat<s2)s2=q.lat;
+    if(q.lon>e)e=q.lon; if(q.lon<w)w=q.lon;
+  }
+  return {n,s:s2,e,w};
+}
+
+function recompute(){
+  const on = constraints.filter(c=>c.on);
+  for(const c of on){
+    if(c.type==='geo' && !c.bbox) c.bbox = bboxOf(c.rings);
+    if(c.type==='poly' && !c.bbox) c.bbox = bboxOf([c.pts]);
+  }
+  let n=0;
+  for(const r of rows){
+    for(let i=0;i<r.cols;i++){
+      const lon = r.lon0 + i*r.dLon;
+      let ok=1;
+      for(const con of on){ if(!keeps(con, r.lat, lon)){ ok=0; break; } }
+      alive[r.start+i]=ok; n+=ok;
+    }
+  }
+  cellLayer.redraw();
+  drawShapes();
+  save();
+  updateStatus(n);
+  renderList();
+}
+
+/* ---------- Husker tilstanden ---------- */
+const KEY = 'gjemsel-peiler-v1';
+let restored = null;
+
+function save(){
+  try{
+    localStorage.setItem(KEY, JSON.stringify({
+      constraints, me, tampen,
+      view: map ? {c:[map.getCenter().lat, map.getCenter().lng], z:map.getZoom()} : null
+    }));
+  }catch(e){}
+}
+try{ restored = JSON.parse(localStorage.getItem(KEY)); }catch(e){}
+
+/* ---------- Kart ---------- */
+const map = L.map('map',{zoomControl:false, attributionControl:true})
+  .setView([CENTER.lat,CENTER.lon], 9);
+L.control.zoom({position:'bottomleft'}).addTo(map);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png',{
+  maxZoom:19, attribution:'© OpenStreetMap'
+}).addTo(map);
+
+L.circle([CENTER.lat,CENTER.lon],{radius:RADIUS,color:'#0F1E2B',weight:2,
+  dashArray:'6 5',fill:false}).addTo(map);
+
+const CellGrid = L.GridLayer.extend({
+  createTile(coords){
+    const tile = L.DomUtil.create('canvas');
+    const size = this.getTileSize();
+    tile.width = size.x; tile.height = size.y;
+    const ctx = tile.getContext('2d');
+    const origin = coords.scaleBy(size);
+    const z = coords.z;
+    const sx = 256*Math.pow(2,z)/360;          // Mercator: x er lineær i lengdegrad
+    ctx.fillStyle = 'rgba(15,30,43,.40)';
+
+    if(!rows.length || !alive) return tile;      // kartet tegner første ruter før brettet er bygget
+    const mid = rows[Math.floor(rows.length/2)];
+    const rowPx = Math.abs(map.project([mid.lat+mid.dLat, 0], z).y - map.project([mid.lat, 0], z).y);
+    const colPx = mid.dLon*sx;
+    const rowStep = Math.max(1, Math.ceil(1.1/rowPx));
+    const colStep = Math.max(1, Math.ceil(1.1/colPx));
+
+    for(let ri=0; ri<rows.length; ri+=rowStep){
+      const r = rows[ri];
+      const yT = Math.round(map.project([r.lat+r.dLat/2, 0], z).y - origin.y);
+      const yB = Math.round(yT + rowPx*rowStep);
+      if(yB < 0 || yT > size.y) continue;
+      const h = Math.max(1, yB-yT);
+      const w = r.dLon*sx;
+      const lonMin = (origin.x - w*colStep)/sx - 180;
+      const lonMax = (origin.x + size.x)/sx - 180;
+      const i0 = Math.max(0, Math.floor((lonMin - r.lon0)/r.dLon));
+      const i1 = Math.min(r.cols-1, Math.ceil((lonMax - r.lon0)/r.dLon));
+      let runStart = -1;
+      for(let i=i0;i<=i1+colStep;i+=colStep){
+        const dead = i<=i1 && !alive[r.start+i];
+        if(dead && runStart<0) runStart = i;
+        if(!dead && runStart>=0){
+          const x1 = Math.round((r.lon0 + runStart*r.dLon + 180)*sx - origin.x);
+          const x2 = Math.round((r.lon0 + i*r.dLon + 180)*sx - origin.x);
+          ctx.fillRect(x1, yT, Math.max(1, x2-x1), h);
+          runStart = -1;
+        }
+      }
+    }
+    return tile;
+  }
+});
+const cellLayer = new CellGrid({tileSize:256, updateWhenZooming:false}).addTo(map);
+
+const dLatB = RADIUS/111320;
+const dLonB = RADIUS/(111320*Math.cos(CENTER.lat*RAD));
+const BOARD = L.latLngBounds(
+  [CENTER.lat-dLatB, CENTER.lon-dLonB],
+  [CENTER.lat+dLatB, CENTER.lon+dLonB]
+);
+
+let me = null, meAcc = 0, watchId = null, follow = false;
+const meLayer = L.layerGroup().addTo(map);
+
+function drawMe(){
+  meLayer.clearLayers();
+  if(!me) return;
+  if(meAcc > 25) L.circle([me.lat,me.lon],{radius:meAcc,color:'#0F1E2B',weight:1,
+    fillColor:'#0F1E2B',fillOpacity:.08}).addTo(meLayer);
+  L.circleMarker([me.lat,me.lon],{radius:8,color:'#fff',weight:3,
+    fillColor:'#0F1E2B',fillOpacity:1}).addTo(meLayer);
+}
+
+function gpsMsg(t){ document.getElementById('meTxt').textContent = t; }
+
+function startWatch(){
+  if(watchId !== null) return;
+  if(!navigator.geolocation){ gpsMsg('Nettleseren har ikke GPS-støtte.'); return; }
+  if(!window.isSecureContext){
+    gpsMsg('GPS er sperret her: siden må åpnes fra en https-adresse, ikke som lokal fil.');
+    return;
+  }
+  gpsMsg('Slår på GPS …');
+  watchId = navigator.geolocation.watchPosition(pos=>{
+    me = {lat:+pos.coords.latitude.toFixed(5), lon:+pos.coords.longitude.toFixed(5)};
+    meAcc = Math.round(pos.coords.accuracy||0);
+    drawMe(); updateMeTxt(); updateTampenBtn();
+    if(follow) map.setView([me.lat,me.lon], Math.max(map.getZoom(),13));
+  }, err=>{
+    navigator.geolocation.clearWatch(watchId); watchId = null;
+    if(err.code === 1) gpsMsg('GPS ble avvist. Tillat stedstjenester for denne siden, og trykk ◎ igjen.');
+    else if(err.code === 3) gpsMsg('GPS svarte ikke i tide. Trykk ◎ for å prøve på nytt.');
+    else gpsMsg('Fant ingen posisjon akkurat nå. Trykk ◎ for å prøve på nytt.');
+  }, {enableHighAccuracy:true, maximumAge:5000, timeout:20000});
+}
+
+function setMe(p){
+  me = p; meAcc = 0;
+  drawMe(); updateMeTxt(); updateTampenBtn(); updateStatusGuessOnly(); save();
+}
+
+function updateMeTxt(){
+  const el = document.getElementById('meTxt');
+  if(!me){ el.textContent = ''; return; }
+  el.textContent = 'Du: '+me.lat.toFixed(4)+', '+me.lon.toFixed(4)+
+    (meAcc ? ' (±'+meAcc+' m)' : ' (satt for hånd)');
+}
+
+const shapes = L.layerGroup().addTo(map);
+const scratch = L.layerGroup().addTo(map);
+let guessCircle = null;
+
+function drawShapes(){
+  shapes.clearLayers();
+  for(const c of constraints){
+    const style = {color:c.on?'#E4632B':'#9aa5ad', weight:1.6, fill:false, dashArray:'4 4'};
+    if(c.type==='radar'){
+      L.circle([c.lat,c.lon],{radius:c.dist,...style}).addTo(shapes);
+      L.circleMarker([c.lat,c.lon],{radius:4,color:style.color,fillOpacity:1}).addTo(shapes);
+    }
+    if(c.type==='tampen'){
+      L.polyline([[c.a.lat,c.a.lon],[c.b.lat,c.b.lon]],{color:style.color,weight:2,dashArray:'4 4'}).addTo(shapes);
+      L.circleMarker([c.a.lat,c.a.lon],{radius:4,color:style.color,fillOpacity:1}).addTo(shapes);
+      L.circleMarker([c.b.lat,c.b.lon],{radius:6,color:style.color,fillOpacity:.35}).addTo(shapes);
+    }
+    if(c.type==='geo'){
+      for(const ring of c.rings)
+        L.polygon(ring.map(q=>[q.lat,q.lon]),{...style,dashArray:null}).addTo(shapes);
+    }
+    if(c.type==='closer'){
+      L.circle([c.ref.lat,c.ref.lon],{radius:c.refDist,...style}).addTo(shapes);
+      L.circleMarker([c.ref.lat,c.ref.lon],{radius:4,color:style.color,fillOpacity:1}).addTo(shapes);
+    }
+    if(c.type==='line'){
+      const dLat = c.b.lat-c.a.lat, dLon = c.b.lon-c.a.lon;
+      const f = 8;
+      L.polyline([
+        [c.a.lat - dLat*f, c.a.lon - dLon*f],
+        [c.b.lat + dLat*f, c.b.lon + dLon*f]
+      ],{color:style.color, weight:2}).addTo(shapes);
+      L.polyline([[c.a.lat,c.a.lon],[c.b.lat,c.b.lon]],{color:style.color,weight:4}).addTo(shapes);
+    }
+    if(c.type==='poly'){
+      L.polygon(c.pts.map(p=>[p.lat,p.lon]),{...style,fill:false}).addTo(shapes);
+    }
+  }
+}
+
+/* ---------- Status og gjett-forslag ---------- */
+function updateStatus(n){
+  const areaCell = CELL_KM*CELL_KM;
+  const area = n*areaCell;
+  document.getElementById('areaTxt').textContent =
+    n===0 ? 'Ingen treff' : (area>=100 ? Math.round(area)+' km²' : area.toFixed(1)+' km²');
+  document.getElementById('cellTxt').textContent =
+    n===0 ? 'sperringene motsier hverandre' : 'åpent — skygge er utelukket';
+
+  if(guessCircle){ map.removeLayer(guessCircle); guessCircle=null; }
+  if(n===0){ guessInfo=null; renderGuess(); return; }
+
+  let sLat=0,sLon=0;
+  for(const row of rows) for(let i=0;i<row.cols;i++) if(alive[row.start+i]){
+    sLat += row.lat; sLon += row.lon0 + i*row.dLon;
+  }
+  const cLat=sLat/n, cLon=sLon/n;
+  let r=0;
+  for(const row of rows) for(let i=0;i<row.cols;i++) if(alive[row.start+i]){
+    const d = dist(cLat, cLon, row.lat, row.lon0 + i*row.dLon);
+    if(d>r) r=d;
+  }
+  r += CELL_KM*500;
+  guessCircle = L.circle([cLat,cLon],{radius:r,color:'#1F7A5A',weight:2,fillOpacity:.05}).addTo(map);
+  guessInfo = {lat:cLat, lon:cLon, r};
+  renderGuess();
+}
+
+let guessInfo = null;
+function renderGuess(){
+  const g = document.getElementById('guessTxt');
+  const big = document.getElementById('status').classList.contains('big');
+  if(!guessInfo){ g.textContent=''; return; }
+  const {lat,lon,r} = guessInfo;
+  if(!big){ g.textContent = '± '+(r/1000).toFixed(1)+' km'; return; }
+  const away = me ? '<br>'+(dist(me.lat,me.lon,lat,lon)/1000).toFixed(1)+' km fra deg' : '';
+  g.innerHTML = 'Gjett: '+lat.toFixed(4)+', '+lon.toFixed(4)+
+    '<br>usikkerhet ≈ '+(r/1000).toFixed(1)+' km'+away;
+}
+
+let statusTimer = null;
+document.getElementById('status').onclick = ()=>{
+  const el = document.getElementById('status');
+  el.classList.toggle('big');
+  renderGuess(); positionHintbar();
+  clearTimeout(statusTimer);
+  if(el.classList.contains('big')) statusTimer = setTimeout(()=>{
+    el.classList.remove('big'); renderGuess(); positionHintbar();
+  }, 8000);
+};
+
+function updateStatusGuessOnly(){
+  let n=0; for(let i=0;i<alive.length;i++) n+=alive[i];
+  updateStatus(n);
+}
+
+/* ---------- Skjema for nye sperringer ---------- */
+const form = document.getElementById('form');
+const hintbar = document.getElementById('hintbar');
+const hintTxt = document.getElementById('hintTxt');
+let pick = null;   // {need, pts, onDone}
+
+function positionHintbar(){
+  hintbar.style.top = (document.getElementById('status').offsetHeight + 8) + 'px';
+}
+window.addEventListener('resize', positionHintbar);
+
+function startPick(need, msg, onDone){
+  pick = {need, pts:[], onDone, msg};
+  hintTxt.textContent = msg;
+  hintbar.classList.add('on');
+  positionHintbar();
+  sheet.classList.remove('open');
+}
+function endPick(){
+  pick=null; hintbar.classList.remove('on'); scratch.clearLayers();
+}
+document.getElementById('cancelBtn').onclick = ()=>{ endPick(); form.style.display='none'; };
+
+function addPoint(p){
+  if(!pick) return;
+  pick.pts.push(p);
+  L.circleMarker([p.lat,p.lon],{radius:5,color:'#E4632B',fillOpacity:1}).addTo(scratch);
+  if(pick.need==='poly'){
+    if(pick.pts.length>1) L.polyline(pick.pts.map(q=>[q.lat,q.lon]),{color:'#E4632B',weight:2}).addTo(scratch);
+    hintTxt.textContent = pick.pts.length+' punkter satt. Trykk «Ferdig» når området er tegnet.';
+    return;
+  }
+  if(pick.pts.length >= pick.need){ const pts=pick.pts; endPick(); pick0(pts); }
+  else hintTxt.textContent = pick.msg2 || pick.msg;
+}
+
+map.on('click', e => addPoint({lat:+e.latlng.lat.toFixed(5), lon:+e.latlng.lng.toFixed(5)}));
+
+document.getElementById('useMeBtn').onclick = ()=>{
+  if(me){ addPoint({lat:me.lat, lon:me.lon}); return; }
+  startWatch();
+  hintTxt.textContent = 'Henter posisjonen din — trykk «Min posisjon» igjen om et øyeblikk.';
+};
+let pick0 = ()=>{};
+
+function openSheet(){ sheet.classList.add('open'); }
+
+/* Avstand (Raadar, Tentakels 2 km, Fotografij 5 km) */
+function addRadar(){
+  form.style.display='none';
+  pick0 = pts => {
+    const p = pts[0];
+    form.style.display='block';
+    form.innerHTML = `
+      <h2>Avstand fra et punkt</h2>
+      <p>Raadar, Tentakels (2 km) og Fotografij (5 km) sier alle om gjemmeteamet er innenfor eller utenfor en avstand fra der dere sto.</p>
+      <label for="mVal">Avstand i meter</label>
+      <input type="number" id="mVal" value="5000" inputmode="numeric">
+      <div class="row" style="margin:9px 0 12px">
+        <button class="tiny" data-m="2000">2 km</button>
+        <button class="tiny" data-m="5000">5 km</button>
+        <button class="tiny" data-m="10000">10 km</button>
+        <button class="tiny" id="edgeBtn">Trykk kanten på kartet</button>
+      </div>
+      <div class="row" style="margin-bottom:12px">
+        <button class="tiny sel" id="inBtn">Innenfor</button>
+        <button class="tiny" id="outBtn">Utenfor</button>
+      </div>
+      <div class="row"><button class="act warm" id="okBtn">Legg til sperring</button></div>`;
+    let inside = true;
+    form.querySelectorAll('[data-m]').forEach(b=>b.onclick=()=>form.querySelector('#mVal').value=b.dataset.m);
+    form.querySelector('#edgeBtn').onclick=()=>{
+      pick0 = pts => {
+        form.querySelector('#mVal').value = Math.round(dist(p.lat,p.lon,pts[0].lat,pts[0].lon));
+        openSheet();
+      };
+      startPick(1,'Trykk der sirkelen skal ha kanten.');
+    };
+    const ib=form.querySelector('#inBtn'), ob=form.querySelector('#outBtn');
+    ib.onclick=()=>{inside=true;ib.classList.add('sel');ob.classList.remove('sel')};
+    ob.onclick=()=>{inside=false;ob.classList.add('sel');ib.classList.remove('sel')};
+    form.querySelector('#okBtn').onclick=()=>{
+      const d = +form.querySelector('#mVal').value;
+      if(!(d>0)) return;
+      constraints.push({id:nextId++,type:'radar',on:true,lat:p.lat,lon:p.lon,dist:d,inside});
+      form.style.display='none'; recompute();
+    };
+    openSheet();
+  };
+  if(me) pick0([{lat:me.lat, lon:me.lon}]);
+  else startPick(1,'Trykk på kartet der dere sto da dere kjøpte hintet.');
+}
+
+/* Tampen brenner — start der hintet kjøpes, stopp der det aktiveres */
+let tampen = null;
+const tampenLayer = L.layerGroup().addTo(map);
+
+function tampenBtn(){ return document.querySelector('[data-add="tampen"]'); }
+
+function updateTampenBtn(){
+  const b = tampenBtn();
+  if(!b) return;
+  if(!tampen){ b.textContent = 'Tampen brenner'; b.classList.remove('warm'); return; }
+  b.classList.add('warm');
+  const d = me ? ' — '+(dist(tampen.a.lat,tampen.a.lon,me.lat,me.lon)/1000).toFixed(1)+' km' : '';
+  b.textContent = 'Stopp tampen'+d;
+  const card = document.getElementById('tampenCard');
+  if(card) card.querySelector('.dtxt').textContent =
+    me ? 'Dere har flyttet dere '+(dist(tampen.a.lat,tampen.a.lon,me.lat,me.lon)/1000).toFixed(2)+' km siden start.'
+       : 'Sett posisjonen din for å se hvor langt dere har flyttet dere.';
+}
+
+function drawTampen(){
+  tampenLayer.clearLayers();
+  if(!tampen) return;
+  L.circleMarker([tampen.a.lat,tampen.a.lon],{radius:7,color:'#E4632B',weight:3,
+    fillColor:'#fff',fillOpacity:1}).addTo(tampenLayer);
+}
+
+function tampenCard(){
+  const old = document.getElementById('tampenCard');
+  if(old) old.remove();
+  if(!tampen) return;
+  const el = document.createElement('div');
+  el.className = 'card'; el.id = 'tampenCard';
+  el.innerHTML = '<h2>Tampen brenner er i gang</h2>' +
+    '<p class="dtxt"></p>' +
+    '<div class="row" style="margin:0"><button class="tiny" id="tampenCancel">Avbryt</button></div>';
+  form.parentNode.insertBefore(el, form.nextSibling);
+  el.querySelector('#tampenCancel').onclick = ()=>{
+    tampen = null; drawTampen(); tampenCard(); updateTampenBtn(); save();
+  };
+  updateTampenBtn();
+}
+
+/* Henter et punkt: bruker posisjonen din hvis den finnes, ellers et trykk på kartet */
+function pointFrom(msg, cb){
+  if(me){ cb({lat:me.lat, lon:me.lon}); return; }
+  pick0 = pts => cb(pts[0]);
+  startPick(1, msg);
+}
+
+function addTampen(){
+  form.style.display='none';
+  if(!tampen){
+    pointFrom('Ingen posisjon ennå — trykk der dere kjøpte hintet.', p=>{
+      tampen = {a:p};
+      drawTampen(); tampenCard(); updateTampenBtn(); save(); openSheet();
+    });
+    return;
+  }
+  pointFrom('Trykk der dere aktiverte hintet.', b=>{
+    const a = tampen.a;
+    if(dist(a.lat,a.lon,b.lat,b.lon) < 30){
+      tell('Dere har knapt flyttet dere. Gå videre før dere stopper tampen.');
+      return;
+    }
+    form.style.display='block';
+    form.innerHTML = `
+      <h2>Ble det varmere?</h2>
+      <p>Dere flyttet dere ${(dist(a.lat,a.lon,b.lat,b.lon)/1000).toFixed(2)} km fra der hintet ble kjøpt.</p>
+      <div class="row" style="margin-bottom:12px">
+        <button class="tiny sel" id="wBtn">Varmere</button>
+        <button class="tiny" id="cBtn">Kaldere</button>
+      </div>
+      <div class="row"><button class="act warm" id="okBtn">Legg til sperring</button></div>`;
+    let warmer = true;
+    const wb=form.querySelector('#wBtn'), cb=form.querySelector('#cBtn');
+    wb.onclick=()=>{warmer=true;wb.classList.add('sel');cb.classList.remove('sel')};
+    cb.onclick=()=>{warmer=false;cb.classList.add('sel');wb.classList.remove('sel')};
+    form.querySelector('#okBtn').onclick=()=>{
+      constraints.push({id:nextId++,type:'tampen',on:true,a,b,warmer});
+      tampen = null; drawTampen(); tampenCard(); updateTampenBtn();
+      form.style.display='none'; recompute();
+    };
+    openSheet();
+  });
+}
+
+/* Søk opp kommune, by eller sted i kartdataene */
+function thinRing(coords){
+  const out = []; let last = null;
+  for(const [lon, lat] of coords){
+    if(!last || dist(last.lat, last.lon, lat, lon) > 120){ out.push({lat,lon}); last = {lat,lon}; }
+  }
+  return out.length >= 3 ? out : null;
+}
+function ringsOf(gj){
+  if(!gj) return null;
+  const polys = gj.type === 'Polygon' ? [gj.coordinates]
+              : gj.type === 'MultiPolygon' ? gj.coordinates : null;
+  if(!polys) return null;
+  const rings = [];
+  for(const poly of polys) for(const ring of poly){
+    const t = thinRing(ring); if(t) rings.push(t);
+  }
+  return rings.length ? rings : null;
+}
+
+async function searchNominatim(q){
+  const r = await fetch('https://nominatim.openstreetmap.org/search?format=jsonv2'+
+    '&polygon_geojson=1&limit=6&countrycodes=nl&q='+encodeURIComponent(q));
+  if(!r.ok) throw new Error('kartsøket svarte '+r.status);
+  return r.json();
+}
+
+async function searchPhoton(q){
+  const r = await fetch('https://photon.komoot.io/api/?limit=6&q='+encodeURIComponent(q));
+  if(!r.ok) throw new Error('reservesøket svarte '+r.status);
+  const d = await r.json();
+  return (d.features||[]).map(f=>({
+    name: f.properties.name,
+    display_name: [f.properties.name, f.properties.city, f.properties.county, f.properties.state]
+      .filter(Boolean).join(', '),
+    lat: f.geometry.coordinates[1],
+    lon: f.geometry.coordinates[0],
+    geojson: null
+  }));
+}
+
+function addPlace(){
+  form.style.display = 'block';
+  form.innerHTML = `
+    <h2>Søk opp et sted</h2>
+    <p>Skriv navnet på kommunen, byen, flyplassen eller stedet hintet handler om. Har stedet en grense i kartdataene, kan dere sperre av hele området.</p>
+    <input type="text" id="q" placeholder="f.eks. Gouda, Alphen aan den Rijn, Schiphol">
+    <div class="row" style="margin:10px 0 0">
+      <button class="act warm" id="goBtn">Søk</button>
+      <button class="act" id="mapBtn">Velg punkt på kartet</button>
+    </div>
+    <div id="res"></div>`;
+  openSheet();
+  const res = form.querySelector('#res');
+
+  form.querySelector('#mapBtn').onclick = ()=>{
+    pick0 = pts => choosePlace({name:'punktet', display_name:'valgt punkt',
+      lat:pts[0].lat, lon:pts[0].lon, geojson:null});
+    startPick(1,'Trykk stedet hintet handler om.');
+  };
+
+  const show = list => {
+    res.innerHTML = '<p style="margin:14px 0 8px">Velg riktig treff:</p>';
+    for(const it of list){
+      const b = document.createElement('button');
+      b.className = 'tiny';
+      b.style.cssText = 'display:block;width:100%;text-align:left;margin-bottom:6px';
+      b.textContent = it.display_name + (it.geojson ? '' : ' · uten grense');
+      b.onclick = ()=>choosePlace(it);
+      res.appendChild(b);
+    }
+  };
+
+  const run = async ()=>{
+    const q = form.querySelector('#q').value.trim();
+    if(!q) return;
+    res.innerHTML = '<p style="margin-top:12px">Søker …</p>';
+    let err = '';
+    try{
+      const list = await searchNominatim(q);
+      if(list.length){ show(list); return; }
+      res.innerHTML = '<p style="margin-top:12px">Ingen treff. Prøv et annet navn.</p>';
+      return;
+    }catch(e){ err = e.message || 'ingen forbindelse'; }
+    try{
+      const list = await searchPhoton(q);
+      if(list.length){ show(list); return; }
+    }catch(e){ err += ', og reservesøket nådde ikke fram'; }
+    res.innerHTML = '<p style="margin-top:12px">Søket nådde ikke fram ('+err+'). '+
+      'Inne i Claude-visningen er utgående nett sperret — åpne appen fra https-adressen. '+
+      'Ellers: velg punkt på kartet, eller tegn området for hånd.</p>';
+  };
+
+  form.querySelector('#goBtn').onclick = run;
+  form.querySelector('#q').addEventListener('keydown', e=>{ if(e.key==='Enter') run(); });
+}
+
+function choosePlace(it){
+  const rings = ringsOf(it.geojson);
+  const ref = {lat:+it.lat, lon:+it.lon};
+  const name = it.name || it.display_name.split(',')[0];
+  const meDist = me ? dist(me.lat, me.lon, ref.lat, ref.lon) : null;
+
+  form.innerHTML = `
+    <h2>${name}</h2>
+    <p>${rings ? 'Matchen: er gjemmeteamet i dette området?' :
+       'Stedet har ingen grense i kartdataene, så bare avstandssvar kan brukes.'}</p>
+    <div class="row" style="margin-bottom:10px">
+      ${rings ? '<button class="tiny" id="inB">De er her</button><button class="tiny" id="outB">De er ikke her</button>' : ''}
+    </div>
+    <p>Zamenlijken: hvem er nærmest ${name}?</p>
+    <div class="row" style="margin-bottom:4px">
+      ${meDist ? '<button class="tiny" id="nearB">De er nærmere</button><button class="tiny" id="farB">Vi er nærmere</button>'
+               : '<span style="font-size:12.5px;color:rgba(15,30,43,.6)">Sett posisjonen din først for å bruke denne.</span>'}
+    </div>`;
+
+  const add = c => { constraints.push({id:nextId++, on:true, name, ...c}); form.style.display='none'; recompute(); };
+  if(rings){
+    form.querySelector('#inB').onclick  = ()=>add({type:'geo', rings, keep:true});
+    form.querySelector('#outB').onclick = ()=>add({type:'geo', rings, keep:false});
+  }
+  if(meDist){
+    form.querySelector('#nearB').onclick = ()=>add({type:'closer', ref, refDist:meDist, closer:true});
+    form.querySelector('#farB').onclick  = ()=>add({type:'closer', ref, refDist:meDist, closer:false});
+  }
+}
+
+/* Strek — del brettet i to og velg siden gjemmeteamet er på */
+function addLine(){
+  form.style.display='none';
+  pick0 = pts => {
+    const [a, b] = pts;
+    const vName = sideName(a,b,true), hName = sideName(a,b,false);
+    form.style.display='block';
+    form.innerHTML = `
+      <h2>Hvilken side er de på?</h2>
+      <p>Streken forlenges i begge retninger over hele brettet. Bruk den til elver, motorveier, jernbane eller en grense dere resonnerer dere fram til.</p>
+      <div class="row" style="margin-bottom:12px">
+        <button class="tiny sel" id="lBtn">${vName} for streken</button>
+        <button class="tiny" id="rBtn">${hName} for streken</button>
+      </div>
+      <div class="row"><button class="act warm" id="okBtn">Legg til sperring</button></div>`;
+    let left = true;
+    const lb=form.querySelector('#lBtn'), rb=form.querySelector('#rBtn');
+    lb.onclick=()=>{left=true;lb.classList.add('sel');rb.classList.remove('sel')};
+    rb.onclick=()=>{left=false;rb.classList.add('sel');lb.classList.remove('sel')};
+    form.querySelector('#okBtn').onclick=()=>{
+      constraints.push({id:nextId++,type:'line',on:true,a,b,left});
+      form.style.display='none'; recompute();
+    };
+    openSheet();
+  };
+  startPick(2,'Trykk to punkter som streken skal gå gjennom.');
+  pick.msg2 = 'Trykk det andre punktet på streken.';
+}
+
+/* Tegnet område — for Matchen, Zamenlijken og alt annet dere resonnerer dere fram til */
+function addPoly(){
+  form.style.display='none';
+  startPick('poly','Trykk rundt området på kartet. Minst tre punkter.');
+  const old = document.getElementById('doneBtn');
+  if(old) old.remove();
+  const done = document.createElement('button');
+  done.id = 'doneBtn';
+  done.textContent = 'Ferdig';
+  done.onclick = ()=>{
+    if(!pick || pick.pts.length<3) return;
+    const pts = pick.pts; endPick();
+    form.style.display='block';
+    form.innerHTML = `
+      <h2>Tegnet område</h2>
+      <p>Bruk dette til Matchen og Zamenlijken: tegn f.eks. kommunen dere er i, eller kyststripa som er nærmere kysten enn dere.</p>
+      <div class="row" style="margin-bottom:12px">
+        <button class="tiny sel" id="kBtn">Gjemmeteamet er her</button>
+        <button class="tiny" id="eBtn">Ikke her</button>
+      </div>
+      <div class="row"><button class="act warm" id="okBtn">Legg til sperring</button></div>`;
+    let keep = true;
+    const kb=form.querySelector('#kBtn'), eb=form.querySelector('#eBtn');
+    kb.onclick=()=>{keep=true;kb.classList.add('sel');eb.classList.remove('sel')};
+    eb.onclick=()=>{keep=false;eb.classList.add('sel');kb.classList.remove('sel')};
+    form.querySelector('#okBtn').onclick=()=>{
+      constraints.push({id:nextId++,type:'poly',on:true,pts,keep});
+      form.style.display='none'; recompute();
+    };
+    done.remove();
+    openSheet();
+  };
+  hintbar.appendChild(done);
+}
+
+document.querySelectorAll('[data-add]').forEach(b=>{
+  b.onclick = ()=>({radar:addRadar,line:addLine,tampen:addTampen,poly:addPoly,place:addPlace})[b.dataset.add]();
+});
+
+/* ---------- Listen ---------- */
+function label(c){
+  if(c.type==='radar') return (c.inside?'Innenfor ':'Utenfor ')+(c.dist/1000).toFixed(1)+' km';
+  if(c.type==='tampen') return c.warmer?'Tampen brenner: varmere':'Tampen brenner: kaldere';
+  if(c.type==='geo') return (c.keep?'I ':'Ikke i ')+c.name;
+  if(c.type==='closer') return (c.closer?'Nærmere ':'Lenger fra ')+c.name+' enn oss';
+  if(c.type==='line') return 'Streken: '+sideName(c.a,c.b,c.left)+' for den';
+  if(c.type==='poly') return c.keep?'Innenfor tegnet område':'Utenfor tegnet område';
+}
+function sub(c){
+  if(c.type==='radar') return 'fra '+c.lat.toFixed(4)+', '+c.lon.toFixed(4);
+  if(c.type==='tampen') return 'flyttet '+(dist(c.a.lat,c.a.lon,c.b.lat,c.b.lon)/1000).toFixed(1)+' km';
+  if(c.type==='geo') return 'område hentet fra kartdata';
+  if(c.type==='closer') return 'vi var '+(c.refDist/1000).toFixed(1)+' km unna';
+  if(c.type==='line') return 'delelinje gjennom '+c.a.lat.toFixed(3)+', '+c.a.lon.toFixed(3);
+  if(c.type==='poly') return c.pts.length+' hjørner';
+}
+function renderList(){
+  const ul=document.getElementById('list');
+  ul.innerHTML='';
+  for(const c of constraints){
+    const li=document.createElement('li');
+    if(!c.on) li.className='off';
+    li.innerHTML = `<span class="eye">${c.on?'●':'○'}</span>
+      <div class="txt">${label(c)}<small>${c.on?sub(c):'skjult — teller ikke med'}</small></div>
+      <button class="tiny del">Fjern</button>`;
+    li.querySelector('.txt').onclick = () => { c.on = !c.on; recompute(); };
+    li.querySelector('.eye').onclick = () => { c.on = !c.on; recompute(); };
+    li.querySelector('.del').onclick = () => {
+      ask('Fjerne «'+label(c)+'»?', ()=>{
+        constraints = constraints.filter(x => x !== c);
+        recompute();
+      });
+    };
+    ul.appendChild(li);
+  }
+  document.getElementById('emptyTxt').style.display = constraints.length? 'none':'block';
+  document.getElementById('bulkRow').style.display = constraints.length>1 ? 'flex':'none';
+  document.getElementById('countTxt').textContent = constraints.filter(c=>c.on).length+' aktive';
+}
+
+function ask(text, onYes){
+  const el = document.getElementById('ask');
+  document.getElementById('askTxt').textContent = text;
+  el.classList.add('on');
+  const close = ()=>{ el.classList.remove('on'); };
+  document.getElementById('askNo').onclick = close;
+  document.getElementById('askYes').onclick = ()=>{ close(); onYes(); };
+}
+
+function tell(text){
+  const el = document.getElementById('ask');
+  document.getElementById('askTxt').textContent = text;
+  el.classList.add('on');
+  document.getElementById('askYes').textContent = 'Greit';
+  document.getElementById('askNo').style.display = 'none';
+  document.getElementById('askYes').onclick = ()=>{
+    el.classList.remove('on');
+    document.getElementById('askYes').textContent = 'Ja';
+    document.getElementById('askNo').style.display = '';
+  };
+}
+
+/* ---------- Panel, posisjon, oppløsning ---------- */
+const sheet=document.getElementById('sheet');
+document.getElementById('grip').onclick=()=>sheet.classList.toggle('open');
+
+const locBtn = document.getElementById('locBtn');
+locBtn.onclick=()=>{
+  if(watchId === null){ startWatch(); follow = true; }
+  else follow = !follow;
+  locBtn.style.background = follow ? '#0F1E2B' : '';
+  locBtn.style.color = follow ? '#F3F0E7' : '';
+  if(follow && me) map.setView([me.lat,me.lon], Math.max(map.getZoom(),13));
+};
+map.on('dragstart', ()=>{ if(follow){ follow=false; locBtn.style.background=''; locBtn.style.color=''; } });
+document.getElementById('fitBtn').onclick=()=>{
+  map.fitBounds(BOARD,{padding:[20,20]});
+};
+
+document.getElementById('setMeBtn').onclick=()=>{
+  pick0 = pts => setMe(pts[0]);
+  startPick(1,'Trykk der dere står nå.');
+};
+
+/* ---------- Lagre / hente ---------- */
+const ARCHIVE = 'gjemsel-peiler-arkiv';
+document.getElementById('newRoundBtn').onclick=()=>{
+  if(!constraints.length && !tampen){ tell('Brettet er allerede blankt.'); return; }
+  ask('Starte ny gjemming? ' + constraints.length + ' sperringer fjernes fra brettet.', ()=>{
+    try{
+      const a = JSON.parse(localStorage.getItem(ARCHIVE) || '[]');
+      a.push({avsluttet:new Date().toISOString(), constraints});
+      localStorage.setItem(ARCHIVE, JSON.stringify(a));
+    }catch(e){}
+    constraints = []; tampen = null;
+    drawTampen(); tampenCard(); updateTampenBtn(); recompute();
+  });
+};
+
+document.getElementById('allOnBtn').onclick=()=>{ constraints.forEach(c=>c.on=true); recompute(); };
+document.getElementById('allOffBtn').onclick=()=>{ constraints.forEach(c=>c.on=false); recompute(); };
+
+/* ---------- Start ---------- */
+let startZoom = true;
+if(restored){
+  if(Array.isArray(restored.constraints)) constraints = restored.constraints;
+  nextId = Math.max(0, ...constraints.map(c=>c.id||0)) + 1;
+  if(restored.me) me = restored.me;
+  if(restored.tampen) tampen = restored.tampen;
+}
+buildGrid();
+recompute();
+drawMe(); updateMeTxt(); drawTampen(); tampenCard(); updateTampenBtn();
+startWatch();
+if(restored && restored.view){
+  map.setView(restored.view.c, restored.view.z);
+  startZoom = false;
+}
+if(startZoom) map.fitBounds(BOARD,{padding:[20,20]});
+map.on('moveend', save);
+positionHintbar();
+</script>
+</body>
+</html>
